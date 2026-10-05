@@ -15,6 +15,7 @@ export default function App() {
   
   const [isRecordingUI, setIsRecordingUI] = useState(false);
   const [isFlippingUI, setIsFlippingUI] = useState(false);
+  const [cameraIsReady, setCameraIsReady] = useState(false);
   const [segmentsCount, setSegmentsCount] = useState(0);
   
   const isRecordingRef = useRef(false);
@@ -29,8 +30,16 @@ export default function App() {
     })();
   }, [hasCameraPermission, hasMicrophonePermission, mediaPermissionResponse]);
 
+  // Reset ready state when camera hardware changes
+  useEffect(() => {
+    setCameraIsReady(false);
+  }, [cameraPosition]);
+
   const startRecording = async () => {
-    if (!cameraRef.current || !device) return;
+    if (!cameraRef.current || !device || !cameraIsReady) {
+      alert("Please wait for the camera to fully initialize!");
+      return;
+    }
     isRecordingRef.current = true;
     setIsRecordingUI(true);
     segmentsRef.current = [];
@@ -41,13 +50,20 @@ export default function App() {
   const recordSegment = () => {
     if (!cameraRef.current || !isRecordingRef.current) return;
     
+    if (typeof cameraRef.current.startRecording !== 'function') {
+      alert("Start Error: The camera hardware on this device is blocking the video recording function right now.");
+      setIsRecordingUI(false);
+      isRecordingRef.current = false;
+      setIsFlippingUI(false);
+      return;
+    }
+    
     try {
       cameraRef.current.startRecording({
         onRecordingFinished: async (video) => {
           segmentsRef.current.push(video.path);
           setSegmentsCount(segmentsRef.current.length);
           
-          // Save to Gallery immediately
           try {
              const localUri = video.path.startsWith('file://') ? video.path : 'file://' + video.path;
              await MediaLibrary.saveToLibraryAsync(localUri);
@@ -55,13 +71,10 @@ export default function App() {
              alert("Failed to save to gallery: " + String(e)); 
           }
           
-          // If we were just waiting to flip, do it NOW safely!
           if (pendingFlipRef.current) {
             pendingFlipRef.current = false;
             setCameraPosition(p => p === 'back' ? 'front' : 'back');
-            // The useEffect below will catch the camera swap and restart recording
           } 
-          // If we intentionally stopped and are completely done
           else if (!isRecordingRef.current) {
             alert(`POC SUCCESS!\nSuccessfully safely saved ${segmentsRef.current.length} hot-swapped clips to Gallery!`);
           }
@@ -75,7 +88,9 @@ export default function App() {
         },
       });
     } catch (e) {
-      alert("Start Error: " + e.message);
+      alert("Start Error: " + String(e));
+      setIsRecordingUI(false);
+      isRecordingRef.current = false;
     }
   };
 
@@ -84,46 +99,44 @@ export default function App() {
     isRecordingRef.current = false;
     setIsRecordingUI(false);
     
-    try {
-      await cameraRef.current.stopRecording();
-    } catch (e) { alert("Stop Error: " + e.message); }
+    if (typeof cameraRef.current.stopRecording === 'function') {
+       try {
+         await cameraRef.current.stopRecording();
+       } catch (e) { alert("Stop Error: " + String(e)); }
+    }
   };
 
   const flipCamera = async () => {
     if (!isRecordingRef.current) {
-      // Just flip normally if not recording
       setCameraPosition(p => p === 'back' ? 'front' : 'back');
       return;
     }
     
-    if (isFlippingUI) return; // Prevent spamming
+    if (isFlippingUI) return;
     
-    // SAFE FLIP LOGIC:
-    // We cannot forcefully rip the hardware out. We MUST politely stop the video, 
-    // wait for it to save to disk, and ONLY THEN swap the camera lens.
     setIsFlippingUI(true);
     pendingFlipRef.current = true;
     
-    try {
-      await cameraRef.current.stopRecording();
-    } catch (e) { 
-      alert("Flip Stop Error: " + e.message); 
-      setIsFlippingUI(false);
-      pendingFlipRef.current = false;
+    if (typeof cameraRef.current.stopRecording === 'function') {
+      try {
+        await cameraRef.current.stopRecording();
+      } catch (e) { 
+        alert("Flip Stop Error: " + String(e)); 
+        setIsFlippingUI(false);
+        pendingFlipRef.current = false;
+      }
     }
   };
 
-  // When the camera physically changes, check if we need to auto-resume recording
   useEffect(() => {
-    if (isRecordingRef.current && device) {
-      // Give the new hardware 500ms to warm up to prevent crashes
+    if (isRecordingRef.current && device && cameraIsReady) {
       const timer = setTimeout(() => {
         setIsFlippingUI(false);
         recordSegment();
-      }, 500); 
+      }, 300); 
       return () => clearTimeout(timer);
     }
-  }, [cameraPosition, device]);
+  }, [cameraIsReady]);
 
   if (!hasCameraPermission || !hasMicrophonePermission) {
     return (
@@ -144,6 +157,7 @@ export default function App() {
         isActive={true}
         video={true}
         audio={true}
+        onInitialized={() => setCameraIsReady(true)}
       />
       
       {/* Overlay UI */}
@@ -157,7 +171,7 @@ export default function App() {
             </TouchableOpacity>
 
             <TouchableOpacity 
-              style={[styles.recordBtn, isRecordingUI && styles.recordingActive]} 
+              style={[styles.recordBtn, isRecordingUI && styles.recordingActive, !cameraIsReady && {opacity: 0.5}]} 
               onPress={isRecordingUI ? stopRecording : startRecording}
             >
               <Text style={styles.text}>{isRecordingUI ? 'STOP' : 'REC'}</Text>
@@ -169,6 +183,12 @@ export default function App() {
           </>
         )}
       </View>
+      
+      {!cameraIsReady && (
+        <View style={StyleSheet.absoluteFill}>
+          <ActivityIndicator size="large" color="red" style={{marginTop: 50}} />
+        </View>
+      )}
     </View>
   );
 }

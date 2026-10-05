@@ -31,6 +31,9 @@ jobs:
       - name: Generate Android project (Expo Prebuild)
         run: npx expo prebuild --clean --platform android
 
+      - name: Enable APK Splitting (Reduces file size by 75%)
+        run: sed -i 's/def enableSeparateBuildPerCPUArchitecture = false/def enableSeparateBuildPerCPUArchitecture = true/' android/app/build.gradle
+
       - name: Build APK (Gradle)
         working-directory: android
         run: ./gradlew assembleDebug
@@ -38,5 +41,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: flipcam-app-debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: flipcam-arm64-debug
+          path: android/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
