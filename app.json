@@ -15,10 +15,27 @@
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
-      }
+      },
+      "package": "com.karvish.flipcam"
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-dev-client",
+      "./withConfig",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow FlipCam to save videos to your gallery.",
+          "savePhotosPermission": "Allow FlipCam to save videos to your gallery."
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "935ce199-9c62-4bd5-998a-9f82b3c7fabd"
+      }
     }
   }
 }
