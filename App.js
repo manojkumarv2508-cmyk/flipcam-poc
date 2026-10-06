@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { Camera, useCameraDevice, useCameraPermission, useMicrophonePermission } from 'react-native-vision-camera';
 import * as MediaLibrary from 'expo-media-library';
 
@@ -13,15 +13,17 @@ export default function App() {
   
   const cameraRef = useRef(null);
   
-  const [isRecordingUI, setIsRecordingUI] = useState(false);
-  const [isFlippingUI, setIsFlippingUI] = useState(false);
-  const [cameraIsReady, setCameraIsReady] = useState(false);
-  const [segmentsCount, setSegmentsCount] = useState(0);
+  // UI States
+  const [isRecording, setIsRecording] = useState(false);
+  const [isFlipping, setIsFlipping] = useState(false);
+  const [isCameraReady, setIsCameraReady] = useState(false);
+  const [savedChunks, setSavedChunks] = useState(0);
   
+  // Logic Refs (To prevent stale closures during rapid state changes)
   const isRecordingRef = useRef(false);
   const pendingFlipRef = useRef(false);
-  const segmentsRef = useRef([]);
 
+  // 1. Handle Permissions
   useEffect(() => {
     (async () => {
       if (!hasCameraPermission) await requestCameraPermission();
@@ -30,114 +32,125 @@ export default function App() {
     })();
   }, [hasCameraPermission, hasMicrophonePermission, mediaPermissionResponse]);
 
-  // Reset ready state when camera hardware changes
+  // Reset ready state when camera physically swaps
   useEffect(() => {
-    setCameraIsReady(false);
+    setIsCameraReady(false);
   }, [cameraPosition]);
 
-  const startRecording = async () => {
-    if (!cameraRef.current || !device || !cameraIsReady) {
-      alert("Please wait for the camera to fully initialize!");
+  // 2. Start Recording
+  const startRecording = () => {
+    if (!cameraRef.current || !device || !isCameraReady) {
+      Alert.alert("Wait", "Camera is warming up.");
       return;
     }
-    isRecordingRef.current = true;
-    setIsRecordingUI(true);
-    segmentsRef.current = [];
-    setSegmentsCount(0);
-    recordSegment();
-  };
-  
-  const recordSegment = () => {
-    if (!cameraRef.current || !isRecordingRef.current) return;
     
     if (typeof cameraRef.current.startRecording !== 'function') {
-      alert("Start Error: The camera hardware on this device is blocking the video recording function right now.");
-      setIsRecordingUI(false);
-      isRecordingRef.current = false;
-      setIsFlippingUI(false);
+      Alert.alert("Error", "Your phone's camera software does not support this recording API.");
       return;
     }
+
+    isRecordingRef.current = true;
+    setIsRecording(true);
+    setSavedChunks(0);
+    
+    triggerNativeRecord();
+  };
+  
+  const triggerNativeRecord = () => {
+    if (!cameraRef.current || !isRecordingRef.current) return;
     
     try {
       cameraRef.current.startRecording({
         onRecordingFinished: async (video) => {
-          segmentsRef.current.push(video.path);
-          setSegmentsCount(segmentsRef.current.length);
-          
+          // Attempt to save to Gallery
           try {
-             const localUri = video.path.startsWith('file://') ? video.path : 'file://' + video.path;
-             await MediaLibrary.saveToLibraryAsync(localUri);
+             const uri = video.path.startsWith('file://') ? video.path : `file://${video.path}`;
+             await MediaLibrary.saveToLibraryAsync(uri);
+             setSavedChunks(prev => prev + 1);
           } catch(e) { 
-             alert("Failed to save to gallery: " + String(e)); 
+             Alert.alert("Gallery Save Error", String(e)); 
           }
           
+          // Check if we need to flip or stop
           if (pendingFlipRef.current) {
             pendingFlipRef.current = false;
             setCameraPosition(p => p === 'back' ? 'front' : 'back');
-          } 
-          else if (!isRecordingRef.current) {
-            alert(`POC SUCCESS!\nSuccessfully safely saved ${segmentsRef.current.length} hot-swapped clips to Gallery!`);
+            // The useEffect below will auto-resume recording when the new camera is ready
+          } else if (!isRecordingRef.current) {
+            Alert.alert("Success!", "Recording stopped and saved to gallery.");
           }
         },
         onRecordingError: (error) => {
-          alert("Recording Error: " + error.message);
-          setIsRecordingUI(false);
-          isRecordingRef.current = false;
-          setIsFlippingUI(false);
-          pendingFlipRef.current = false;
+          Alert.alert("Native Recording Error", error.message || String(error));
+          stopRecordingState();
         },
       });
     } catch (e) {
-      alert("Start Error: " + String(e));
-      setIsRecordingUI(false);
-      isRecordingRef.current = false;
+      Alert.alert("Crash Error", String(e));
+      stopRecordingState();
     }
   };
 
+  // Helper to safely reset UI on crash
+  const stopRecordingState = () => {
+    isRecordingRef.current = false;
+    setIsRecording(false);
+    setIsFlipping(false);
+    pendingFlipRef.current = false;
+  };
+
+  // 3. Stop Recording
   const stopRecording = async () => {
     if (!cameraRef.current || !isRecordingRef.current) return;
     isRecordingRef.current = false;
-    setIsRecordingUI(false);
+    setIsRecording(false);
     
-    if (typeof cameraRef.current.stopRecording === 'function') {
-       try {
-         await cameraRef.current.stopRecording();
-       } catch (e) { alert("Stop Error: " + String(e)); }
+    try {
+      if (typeof cameraRef.current.stopRecording === 'function') {
+        await cameraRef.current.stopRecording();
+      }
+    } catch (e) { 
+      Alert.alert("Stop Error", String(e)); 
     }
   };
 
+  // 4. Flip Camera
   const flipCamera = async () => {
     if (!isRecordingRef.current) {
+      // Just visually flip if not recording
       setCameraPosition(p => p === 'back' ? 'front' : 'back');
       return;
     }
     
-    if (isFlippingUI) return;
+    if (isFlipping) return;
     
-    setIsFlippingUI(true);
+    // Safely stop the current chunk, wait for it to save, then flip
+    setIsFlipping(true);
     pendingFlipRef.current = true;
     
-    if (typeof cameraRef.current.stopRecording === 'function') {
-      try {
+    try {
+      if (typeof cameraRef.current.stopRecording === 'function') {
         await cameraRef.current.stopRecording();
-      } catch (e) { 
-        alert("Flip Stop Error: " + String(e)); 
-        setIsFlippingUI(false);
-        pendingFlipRef.current = false;
       }
+    } catch (e) { 
+      Alert.alert("Flip Error", String(e)); 
+      setIsFlipping(false);
+      pendingFlipRef.current = false;
     }
   };
 
+  // Auto-resume recording after a flip is completed and the new lens is ready
   useEffect(() => {
-    if (isRecordingRef.current && device && cameraIsReady) {
+    if (isRecordingRef.current && isCameraReady && device) {
       const timer = setTimeout(() => {
-        setIsFlippingUI(false);
-        recordSegment();
-      }, 300); 
+        setIsFlipping(false);
+        triggerNativeRecord();
+      }, 300); // 300ms buffer for Samsung hardware
       return () => clearTimeout(timer);
     }
-  }, [cameraIsReady]);
+  }, [isCameraReady, device]);
 
+  // Loading States
   if (!hasCameraPermission || !hasMicrophonePermission) {
     return (
       <View style={styles.container}>
@@ -146,7 +159,9 @@ export default function App() {
     );
   }
 
-  if (device == null) return <View style={styles.container}><ActivityIndicator size="large" color="white" /></View>;
+  if (device == null) {
+    return <View style={styles.container}><ActivityIndicator size="large" color="white" /></View>;
+  }
 
   return (
     <View style={styles.container}>
@@ -157,12 +172,12 @@ export default function App() {
         isActive={true}
         video={true}
         audio={true}
-        onInitialized={() => setCameraIsReady(true)}
+        onInitialized={() => setIsCameraReady(true)}
       />
       
-      {/* Overlay UI */}
+      {/* UI Controls Overlay */}
       <View style={styles.controls}>
-        {isFlippingUI ? (
+        {isFlipping ? (
            <ActivityIndicator size="large" color="white" />
         ) : (
           <>
@@ -171,24 +186,19 @@ export default function App() {
             </TouchableOpacity>
 
             <TouchableOpacity 
-              style={[styles.recordBtn, isRecordingUI && styles.recordingActive, !cameraIsReady && {opacity: 0.5}]} 
-              onPress={isRecordingUI ? stopRecording : startRecording}
+              style={[styles.recordBtn, isRecording && styles.recordingActive, !isCameraReady && {opacity: 0.5}]} 
+              onPress={isRecording ? stopRecording : startRecording}
+              disabled={!isCameraReady}
             >
-              <Text style={styles.text}>{isRecordingUI ? 'STOP' : 'REC'}</Text>
+              <Text style={styles.text}>{isRecording ? 'STOP' : 'REC'}</Text>
             </TouchableOpacity>
             
             <View style={{width: 60, alignItems: 'center'}}>
-               {segmentsCount > 0 && <Text style={{color:'white'}}>Saved: {segmentsCount}</Text>}
+               {savedChunks > 0 && <Text style={{color:'white'}}>Saved: {savedChunks}</Text>}
             </View>
           </>
         )}
       </View>
-      
-      {!cameraIsReady && (
-        <View style={StyleSheet.absoluteFill}>
-          <ActivityIndicator size="large" color="red" style={{marginTop: 50}} />
-        </View>
-      )}
     </View>
   );
 }
