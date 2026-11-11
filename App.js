@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { Camera, useCameraDevice, useCameraPermission, useMicrophonePermission, useVideoOutput } from 'react-native-vision-camera';
 import * as MediaLibrary from 'expo-media-library';
+import { File, Paths } from 'expo-file-system';
+import { mergeVideos } from './modules/flipcam-merge';
 
 export default function App() {
   const { hasPermission: hasCameraPermission, requestPermission: requestCameraPermission } = useCameraPermission();
@@ -20,10 +22,12 @@ export default function App() {
   const [isFlipping, setIsFlipping] = useState(false);
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [savedChunks, setSavedChunks] = useState(0);
+  const [isMerging, setIsMerging] = useState(false);
   
   // Logic Refs (To prevent stale closures during rapid state changes)
   const isRecordingRef = useRef(false);
   const pendingFlipRef = useRef(false);
+  const chunkPathsRef = useRef([]);
 
   // 1. Handle Permissions
   useEffect(() => {
@@ -49,6 +53,7 @@ export default function App() {
     isRecordingRef.current = true;
     setIsRecording(true);
     setSavedChunks(0);
+    chunkPathsRef.current = [];
     
     triggerNativeRecord();
   };
@@ -62,22 +67,17 @@ export default function App() {
 
       recorder.startRecording(
         async (filePath, reason) => {
-          // onRecordingFinished
-          try {
-             const uri = filePath.startsWith('file://') ? filePath : `file://${filePath}`;
-             await MediaLibrary.saveToLibraryAsync(uri);
-             setSavedChunks(prev => prev + 1);
-          } catch(e) { 
-             Alert.alert("Gallery Save Error", String(e)); 
-          }
-          
-          // Check if we need to flip or stop
+          // onRecordingFinished: just remember the clip; merge happens on final stop
+          const uri = filePath.startsWith('file://') ? filePath : `file://${filePath}`;
+          chunkPathsRef.current.push(uri);
+          setSavedChunks(chunkPathsRef.current.length);
+
           if (pendingFlipRef.current) {
             pendingFlipRef.current = false;
             setCameraPosition(p => p === 'back' ? 'front' : 'back');
-            // The useEffect below will auto-resume recording when the new camera is ready
+            // The effect below auto-resumes recording when the new camera is ready
           } else if (!isRecordingRef.current) {
-            Alert.alert("Success!", "Recording stopped and saved to gallery.");
+            await finalizeRecording();
           }
         },
         (error) => {
@@ -89,6 +89,38 @@ export default function App() {
     } catch (e) {
       Alert.alert("Crash Error", String(e));
       stopRecordingState();
+    }
+  };
+
+  // Merge all clips into ONE video, save to gallery, clean up temp files
+  const finalizeRecording = async () => {
+    const clips = chunkPathsRef.current;
+    chunkPathsRef.current = [];
+    if (clips.length === 0) return;
+    setIsMerging(true);
+    const cleanup = (list) => list.forEach((u) => { try { new File(u).delete(); } catch (e) {} });
+    try {
+      if (clips.length === 1) {
+        await MediaLibrary.saveToLibraryAsync(clips[0]);
+      } else {
+        const out = `${Paths.cache.uri}flipcam_${Date.now()}.mp4`;
+        const merged = await mergeVideos(clips, out);
+        const mergedUri = merged.startsWith('file://') ? merged : `file://${merged}`;
+        await MediaLibrary.saveToLibraryAsync(mergedUri);
+        cleanup([mergedUri]);
+      }
+      cleanup(clips);
+      Alert.alert("Success!", "Recording saved to gallery as one video.");
+    } catch (e) {
+      // Fallback: never lose footage - save the clips separately
+      try {
+        for (const c of clips) await MediaLibrary.saveToLibraryAsync(c);
+        Alert.alert("Merge failed", "Saved as separate clips instead. " + String(e));
+      } catch (e2) {
+        Alert.alert("Gallery Save Error", String(e2));
+      }
+    } finally {
+      setIsMerging(false);
     }
   };
 
@@ -179,7 +211,7 @@ export default function App() {
       
       {/* UI Controls Overlay */}
       <View style={styles.controls}>
-        {isFlipping ? (
+        {isFlipping || isMerging ? (
            <ActivityIndicator size="large" color="white" />
         ) : (
           <>
@@ -196,7 +228,7 @@ export default function App() {
             </TouchableOpacity>
             
             <View style={{width: 60, alignItems: 'center'}}>
-               {savedChunks > 0 && <Text style={{color:'white'}}>Saved: {savedChunks}</Text>}
+               {savedChunks > 0 && <Text style={{color:'white'}}>Clips: {savedChunks}</Text>}
             </View>
           </>
         )}
