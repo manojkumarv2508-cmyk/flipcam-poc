@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
-import { Camera, useCameraDevice, useCameraPermission, useMicrophonePermission } from 'react-native-vision-camera';
+import { Camera, useCameraDevice, useCameraPermission, useMicrophonePermission, useVideoOutput } from 'react-native-vision-camera';
 import * as MediaLibrary from 'expo-media-library';
 
 export default function App() {
@@ -12,6 +12,8 @@ export default function App() {
   const device = useCameraDevice(cameraPosition);
   
   const cameraRef = useRef(null);
+  const recorderRef = useRef(null);
+  const videoOutput = useVideoOutput({ enableAudio: true });
   
   // UI States
   const [isRecording, setIsRecording] = useState(false);
@@ -39,16 +41,11 @@ export default function App() {
 
   // 2. Start Recording
   const startRecording = () => {
-    if (!cameraRef.current || !device || !isCameraReady) {
+    if (!device || !isCameraReady) {
       Alert.alert("Wait", "Camera is warming up.");
       return;
     }
     
-    if (typeof cameraRef.current.startRecording !== 'function') {
-      Alert.alert("Error", "Your phone's camera software does not support this recording API.");
-      return;
-    }
-
     isRecordingRef.current = true;
     setIsRecording(true);
     setSavedChunks(0);
@@ -56,15 +53,18 @@ export default function App() {
     triggerNativeRecord();
   };
   
-  const triggerNativeRecord = () => {
-    if (!cameraRef.current || !isRecordingRef.current) return;
+  const triggerNativeRecord = async () => {
+    if (!isRecordingRef.current) return;
     
     try {
-      cameraRef.current.startRecording({
-        onRecordingFinished: async (video) => {
-          // Attempt to save to Gallery
+      const recorder = await videoOutput.createRecorder({});
+      recorderRef.current = recorder;
+
+      recorder.startRecording(
+        async (filePath, reason) => {
+          // onRecordingFinished
           try {
-             const uri = video.path.startsWith('file://') ? video.path : `file://${video.path}`;
+             const uri = filePath.startsWith('file://') ? filePath : `file://${filePath}`;
              await MediaLibrary.saveToLibraryAsync(uri);
              setSavedChunks(prev => prev + 1);
           } catch(e) { 
@@ -80,11 +80,12 @@ export default function App() {
             Alert.alert("Success!", "Recording stopped and saved to gallery.");
           }
         },
-        onRecordingError: (error) => {
+        (error) => {
+          // onRecordingError
           Alert.alert("Native Recording Error", error.message || String(error));
           stopRecordingState();
-        },
-      });
+        }
+      );
     } catch (e) {
       Alert.alert("Crash Error", String(e));
       stopRecordingState();
@@ -101,13 +102,14 @@ export default function App() {
 
   // 3. Stop Recording
   const stopRecording = async () => {
-    if (!cameraRef.current || !isRecordingRef.current) return;
+    if (!isRecordingRef.current) return;
     isRecordingRef.current = false;
     setIsRecording(false);
     
     try {
-      if (typeof cameraRef.current.stopRecording === 'function') {
-        await cameraRef.current.stopRecording();
+      if (recorderRef.current) {
+        await recorderRef.current.stopRecording();
+        recorderRef.current = null;
       }
     } catch (e) { 
       Alert.alert("Stop Error", String(e)); 
@@ -129,8 +131,9 @@ export default function App() {
     pendingFlipRef.current = true;
     
     try {
-      if (typeof cameraRef.current.stopRecording === 'function') {
-        await cameraRef.current.stopRecording();
+      if (recorderRef.current) {
+        await recorderRef.current.stopRecording();
+        recorderRef.current = null;
       }
     } catch (e) { 
       Alert.alert("Flip Error", String(e)); 
@@ -170,8 +173,7 @@ export default function App() {
         style={StyleSheet.absoluteFill}
         device={device}
         isActive={true}
-        video={true}
-        audio={true}
+        outputs={[videoOutput]}
         onInitialized={() => setIsCameraReady(true)}
       />
       

@@ -34,12 +34,12 @@ jobs:
       - name: Enable APK Splitting (Reduces file size by 75%)
         run: sed -i 's/def enableSeparateBuildPerCPUArchitecture = false/def enableSeparateBuildPerCPUArchitecture = true/' android/app/build.gradle
 
-      - name: Build APK (Gradle)
+      - name: Build Release APK (Gradle)
         working-directory: android
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleRelease
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: flipcam-arm64-debug
-          path: android/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
+          name: flipcam-arm64-release
+          path: android/app/build/outputs/apk/release/app-arm64-v8a-release.apk
