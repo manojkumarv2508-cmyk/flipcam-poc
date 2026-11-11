@@ -42,4 +42,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: flipcam-arm64-release
-          path: android/app/build/outputs/apk/release/app-arm64-v8a-release.apk
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
