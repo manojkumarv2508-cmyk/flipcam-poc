@@ -33,6 +33,7 @@ jobs:
 
       - name: Enable shrinking
         run: |
+          echo "" >> android/gradle.properties
           echo "android.enableMinifyInReleaseBuilds=true" >> android/gradle.properties
           echo "android.enableShrinkResourcesInReleaseBuilds=true" >> android/gradle.properties
 
